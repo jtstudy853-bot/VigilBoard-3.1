@@ -371,46 +371,40 @@ async function btScan() {
 // Connect to a specific Bluetooth device
 async function btConnectDevice(dev) {
   if (!dev) return;
-
   btLog(`Connecting to ${dev.name || 'device'}…`, 'info');
 
   try {
     const server = await dev.gatt.connect();
+    btLog('GATT connected, discovering services…', 'info');
 
-    // Wait until UART service is actually available
-    async function getUartService(server, retries = 6) {
+    async function getUartService(server, retries = 15) {
       for (let i = 0; i < retries; i++) {
         try {
-          return await server.getPrimaryService(NUS_SERVICE_UUID);
+          const svc = await server.getPrimaryService(NUS_SERVICE_UUID);
+          btLog(`Service found on attempt ${i + 1}`, 'ok');
+          return svc;
         } catch (e) {
-          console.warn(`Service discovery attempt ${i+1} failed:`, e.message); // log it!
-          await new Promise(r => setTimeout(r, 300));
+          btLog(`Service not ready yet (attempt ${i + 1}/${retries}): ${e.message}`, 'info');
+          await new Promise(r => setTimeout(r, 500));
         }
       }
-      throw new Error("UART service not available");
+      throw new Error('UART service not available after ' + retries + ' attempts. Check: No Pairing Required is set in MakeCode, and old pairing is forgotten in OS Bluetooth settings.');
     }
 
     const service = await getUartService(server);
 
-    const tx = await service.getCharacteristic(NUS_RX_CHAR_UUID);
-    const rx = await service.getCharacteristic(NUS_TX_CHAR_UUID);
-
-    btTx = tx;
-    btNotifyChar = rx;
+    btTx = await service.getCharacteristic(NUS_RX_CHAR_UUID);
+    btNotifyChar = await service.getCharacteristic(NUS_TX_CHAR_UUID);
 
     await btNotifyChar.startNotifications();
-    btNotifyChar.addEventListener(
-      'characteristicvaluechanged',
-      handleUartNotification
-    );
+    btNotifyChar.addEventListener('characteristicvaluechanged', handleUartNotification);
 
     btDevice = dev;
     btConnected = true;
 
     setConnectedUI(dev.name || 'micro:bit');
-    btLog("Connected ✓", "ok");
-
-    await sendCmd("PING");
+    btLog('Connected ✓', 'ok');
+    await sendCmd('PING');
 
     dev.addEventListener('gattserverdisconnected', () => {
       btConnected = false;
@@ -420,12 +414,8 @@ async function btConnectDevice(dev) {
       uartBuffer = '';
       setDisconnectedUI();
       addAlert({
-        icon: '⚠️',
-        lvl: 'warn',
-        title: 'Bluetooth disconnected',
-        src: 'Bluetooth',
-        urgency: 'm',
-        unread: false,
+        icon: '⚠️', lvl: 'warn', title: 'Bluetooth disconnected',
+        src: 'Bluetooth', urgency: 'm', unread: false,
         body: 'The micro:bit was disconnected.'
       });
       btLog('Disconnected', 'err');
@@ -434,12 +424,8 @@ async function btConnectDevice(dev) {
   } catch (e) {
     btLog(`Connection failed: ${e.message}`, 'err');
     addAlert({
-      icon: '❌',
-      lvl: 'crit',
-      title: 'Bluetooth connection failed',
-      src: 'Bluetooth',
-      urgency: 'h',
-      unread: false,
+      icon: '❌', lvl: 'crit', title: 'Bluetooth connection failed',
+      src: 'Bluetooth', urgency: 'h', unread: false,
       body: e.message
     });
     setDisconnectedUI();
