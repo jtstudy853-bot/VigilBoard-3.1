@@ -393,8 +393,8 @@ async function btConnectDevice(dev) {
 
     const service = await getUartService(server);
 
-    btTx = await service.getCharacteristic(NUS_RX_CHAR_UUID);
-    btNotifyChar = await service.getCharacteristic(NUS_TX_CHAR_UUID);
+    btNotifyChar = await service.getCharacteristic(NUS_RX_CHAR_UUID); // 6e400002 — subscribe (mic:bit → app)
+    btTx = await service.getCharacteristic(NUS_TX_CHAR_UUID);         // 6e400003 — write (app → micro:bit)
 
     await btNotifyChar.startNotifications();
     btNotifyChar.addEventListener('characteristicvaluechanged', handleUartNotification);
