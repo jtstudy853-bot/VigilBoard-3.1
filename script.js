@@ -383,7 +383,7 @@ async function btConnectDevice(dev) {
         try {
           return await server.getPrimaryService(NUS_SERVICE_UUID);
         } catch (e) {
-          console.log("Retrying service discovery...", i);
+          console.warn(`Service discovery attempt ${i+1} failed:`, e.message); // log it!
           await new Promise(r => setTimeout(r, 300));
         }
       }
