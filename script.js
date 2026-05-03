@@ -612,25 +612,6 @@ function buildChart() {
   ).join('');
 }
 
-setInterval(() => {
-  const clock = document.getElementById('clock');
-  if (clock) clock.textContent = nowTime();
-}, 1000);
-
-const clock = document.getElementById('clock');
-if (clock) clock.textContent = nowTime();
-
-buildMicroGrid();
-buildChart();
-renderAlerts();
-setDisconnectedUI();
-renderDeviceEmptyState('No device found');
-setInterval(buildChart, 60000);
-
-// Initialize dashboard page title
-switchPage('dashboard');
-
-
 // ============================================
 // GMAIL INTEGRATION
 // ============================================
@@ -641,41 +622,14 @@ const GOOGLE_CLIENT_ID = "768854227704-2mc6bip356pa56ejomb9lss8noc1b82c.apps.goo
 const SCOPES = "https://www.googleapis.com/auth/gmail.readonly";
 let tokenClient;
 
-document.getElementById("googleSignInBtn").onclick = () => {
-
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: GOOGLE_CLIENT_ID,
-    scope: SCOPES,
-
-    callback: (tokenResponse) => {
-      gmailToken = tokenResponse.access_token;
-
-      document.getElementById("gmailStatus").textContent = "Connected";
-
-      fetchGmailProfile();
-      fetchGmail();
-      startPolling();
-    }
-  });
-
-  tokenClient.requestAccessToken();
-};
-
 async function fetchGmailProfile() {
   const res = await fetch(
     "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-    {
-      headers: {
-        Authorization: `Bearer ${gmailToken}`
-      }
-    }
+    { headers: { Authorization: `Bearer ${gmailToken}` } }
   );
-
   const data = await res.json();
   gmailEmail = data.emailAddress;
-
   document.getElementById("connectedEmail").textContent = gmailEmail;
-
   document.getElementById("googleSignInBtn").style.display = "none";
   document.getElementById("googleSignOutBtn").style.display = "inline-block";
 }
@@ -684,23 +638,90 @@ function startPolling() {
   setInterval(fetchGmail, 15000);
 }
 
-// Sign out from Gmail
-document.getElementById("googleSignOutBtn").onclick = () => {
-  gmailToken = null;
-  gmailEmail = null;
-  gmailKnownMessageIds.clear();
-  gmailBaselineCaptured = false;
+// ============================================
+// EXPOSE GLOBALS FOR INLINE onclick HANDLERS
+// (needed because the script loads with defer —
+//  functions must be on window before clicks fire)
+// ============================================
+window.switchPage        = switchPage;
+window.toggleSidebar     = toggleSidebar;
+window.clearAlerts       = clearAlerts;
+window.modalOpen         = modalOpen;
+window.modalClose        = modalClose;
+window.modalAck          = modalAck;
+window.ackAlert          = ackAlert;
+window.testFlash         = testFlash;
+window.clearLog          = clearLog;
+window.btScan            = btScan;
+window.btDisconnect      = btDisconnect;
+window.btConnectDevice   = btConnectDevice;
+window.sendCmd           = sendCmd;
+window.sendCustomCmd     = sendCustomCmd;
+window.triggerAlert      = triggerAlert;
+window.toggleSource      = toggleSource;
+window.simulateEmailAlert = simulateEmailAlert;
+window.resetSettings     = resetSettings;
+window.fetchGmail        = fetchGmail;
+window.clearGmailFeed    = clearGmailFeed;
+window.openGmailMessage  = openGmailMessage;
 
-  document.getElementById("gmailStatus").textContent = "Disconnected";
-  document.getElementById("connectedEmail").textContent = "—";
+// ============================================
+// DOM-READY INITIALISATION
+// ============================================
+document.addEventListener('DOMContentLoaded', () => {
+  // Clock
+  const clockEl = document.getElementById('clock');
+  if (clockEl) clockEl.textContent = nowTime();
+  setInterval(() => {
+    const el = document.getElementById('clock');
+    if (el) el.textContent = nowTime();
+  }, 1000);
 
-  document.getElementById("googleSignInBtn").style.display = "inline-block";
-  document.getElementById("googleSignOutBtn").style.display = "none";
+  // App startup
+  buildMicroGrid();
+  buildChart();
+  renderAlerts();
+  setDisconnectedUI();
+  renderDeviceEmptyState('No device found');
+  setInterval(buildChart, 60000);
+  switchPage('dashboard');
 
-  document.getElementById("gmailFeed").innerHTML =
-    `<div class="empty"><p>No emails loaded</p></div>`;
-  updateCounts();
-};
+  // Gmail button wiring (done here so elements are guaranteed to exist)
+  const signInBtn = document.getElementById("googleSignInBtn");
+  if (signInBtn) {
+    signInBtn.onclick = () => {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: SCOPES,
+        callback: (tokenResponse) => {
+          gmailToken = tokenResponse.access_token;
+          document.getElementById("gmailStatus").textContent = "Connected";
+          fetchGmailProfile();
+          fetchGmail();
+          startPolling();
+        }
+      });
+      tokenClient.requestAccessToken();
+    };
+  }
+
+  const signOutBtn = document.getElementById("googleSignOutBtn");
+  if (signOutBtn) {
+    signOutBtn.onclick = () => {
+      gmailToken = null;
+      gmailEmail = null;
+      gmailKnownMessageIds.clear();
+      gmailBaselineCaptured = false;
+      document.getElementById("gmailStatus").textContent = "Disconnected";
+      document.getElementById("connectedEmail").textContent = "—";
+      document.getElementById("googleSignInBtn").style.display = "inline-block";
+      document.getElementById("googleSignOutBtn").style.display = "none";
+      document.getElementById("gmailFeed").innerHTML =
+        `<div class="empty"><p>No emails loaded</p></div>`;
+      updateCounts();
+    };
+  }
+});
 
 // Fetch emails from Gmail API
 async function fetchGmail() {
@@ -862,77 +883,3 @@ function decodeGmailBase64(data) {
     return atob(data.replace(/-/g, '+').replace(/_/g, '/'));
   }
 }
-
-let messages = [];
-let lastMessageId = null;
-let isLiveSyncActive = false;
-
-async function loadInitialMessages() {
-  const res = await fetch('/api/messages?limit=10');
-
-  const data = await res.json();
-
-  messages = data.messages;
-
-  if (messages.length > 0) {
-    lastMessageId = messages[0].id; // newest message
-  }
-
-  renderMessages(messages);
-
-  startLiveSync();
-}
-
-function startLiveSync() {
-  if (isLiveSyncActive) return;
-  isLiveSyncActive = true;
-
-  setInterval(async () => {
-    const res = await fetch(
-      `/api/messages?afterId=${lastMessageId}`
-    );
-
-    const newMessages = await res.json();
-
-    if (newMessages.length > 0) {
-      // prepend new messages
-      messages = [...newMessages, ...messages];
-
-      // update pointer
-      lastMessageId = newMessages[0].id;
-
-      renderMessages(messages);
-    }
-  }, 5000); // every 5 seconds
-}
-
-function renderMessages(list) {
-  const container = document.getElementById('inbox');
-
-  container.innerHTML = list
-    .map(msg => `
-      <div class="message">
-        <div class="subject">${msg.subject}</div>
-        <div class="meta">${msg.sender}</div>
-      </div>
-    `)
-    .join('');
-}
-
-let historyCursor = null;
-
-async function syncDelta() {
-  const res = await fetch(
-    `/api/history?cursor=${historyCursor}`
-  );
-
-  const data = await res.json();
-
-  historyCursor = data.newCursor;
-
-  if (data.newMessages.length) {
-    messages = [...data.newMessages, ...messages];
-    renderMessages(messages);
-  }
-}
-
