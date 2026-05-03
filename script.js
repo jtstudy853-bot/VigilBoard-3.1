@@ -12,9 +12,9 @@ let gmailKnownMessageIds = new Set();
 let gmailBaselineCaptured = false;
 let gmailMessages = [];
 
-const NUS_SERVICE_UUID = 'e95d0753-251d-470a-a062-fa1922dfa9a8';
-const NUS_RX_CHAR_UUID = 'e95d5404-251d-470a-a062-fa1922dfa9a8';
-const NUS_TX_CHAR_UUID = 'e95d93ee-251d-470a-a062-fa1922dfa9a8';
+const NUS_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_RX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // write
+const NUS_TX_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // notify
 
 // Alert source configuration
 const sources = { email: true, call: true, message: true, notif: false };
