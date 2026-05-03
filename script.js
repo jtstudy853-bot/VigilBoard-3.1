@@ -12,17 +12,19 @@ let gmailKnownMessageIds = new Set();
 let gmailBaselineCaptured = false;
 let gmailMessages = [];
 
+// Nordic UART Service UUIDs — these match what micro:bit V2 actually advertises
+// Confirmed via chrome://bluetooth-internals
 const NUS_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-const NUS_RX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
-const NUS_TX_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_TX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // micro:bit → app (notify)
+const NUS_RX_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // app → micro:bit (write)
 
 // Alert source configuration
 const sources = { email: true, call: true, message: true, notif: false };
 const sourceConfig = {
-  call: { icon: '📞', title: 'Incoming Call', urgency: 'h', cmd: 'CALL:HIGH' },
-  message: { icon: '💬', title: 'New Message', urgency: 'm', cmd: 'MSG:MED' },
-  email: { icon: '✉️', title: 'Email Received', urgency: 'l', cmd: 'EMAIL:LOW' },
-  notif: { icon: '🔔', title: 'Notification', urgency: 'l', cmd: 'NOTIF:LOW' }
+  call:    { icon: '📞', title: 'Incoming Call',  urgency: 'h', cmd: 'CALL:HIGH' },
+  message: { icon: '💬', title: 'New Message',    urgency: 'm', cmd: 'MSG:MED'   },
+  email:   { icon: '✉️', title: 'Email Received', urgency: 'l', cmd: 'EMAIL:LOW' },
+  notif:   { icon: '🔔', title: 'Notification',   urgency: 'l', cmd: 'NOTIF:LOW' }
 };
 
 // Initial alerts array
@@ -41,50 +43,44 @@ let alerts = [{
 // ============================================
 // UTILITY FUNCTIONS
 // ============================================
-// Get current time in HH:MM:SS format
 function nowTime() {
   return new Date().toLocaleTimeString('en-SG', { hour12: false });
 }
 
-// Toggle sidebar collapse state
 function toggleSidebar() {
   sidebarCollapsed = !sidebarCollapsed;
   document.getElementById('sidebar').classList.toggle('collapsed', sidebarCollapsed);
 }
 
-// Page metadata for navigation
 const pageMeta = {
   dashboard: ['Dashboard', 'PHONE ALERTS → MICRO:BIT'],
-  bluetooth: ['Bluetooth', 'DEVICE CONFIGURATION'],
-  sources: ['Sources', 'CONFIGURE INPUT FILTERS'],
-  settings: ['Settings', 'PREFERENCES & DEVICE']
+  bluetooth:  ['Bluetooth', 'DEVICE CONFIGURATION'],
+  sources:    ['Sources',   'CONFIGURE INPUT FILTERS'],
+  settings:   ['Settings',  'PREFERENCES & DEVICE']
 };
 
-// Switch between pages in the app and update header
 function switchPage(name, navEl) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  // Match nav item by data-page if navEl not passed or doesn't have data-page
-  const targetNav = navEl && navEl.dataset && navEl.dataset.page ? navEl : document.querySelector(`.nav-item[data-page="${name}"]`);
+  const targetNav = navEl && navEl.dataset && navEl.dataset.page
+    ? navEl
+    : document.querySelector(`.nav-item[data-page="${name}"]`);
   if (targetNav) targetNav.classList.add('active');
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const page = document.getElementById('page-' + name);
   if (page) page.classList.add('active');
-  const [title, sub] = pageMeta[name] || ['', ''];
-  // Update centered page label in top bar
   const pageTitle = name.charAt(0).toUpperCase() + name.slice(1);
   const labelEl = document.getElementById('pageLabel');
   if (labelEl) labelEl.textContent = pageTitle;
-  // Legacy support
   const pageTitleEl = document.getElementById('pageTitle');
   if (pageTitleEl) pageTitleEl.textContent = pageTitle;
+  const [, sub] = pageMeta[name] || ['', ''];
   const pageSubEl = document.getElementById('pageSub');
   if (pageSubEl) pageSubEl.textContent = sub;
 }
 
-/* ============================================
-   ALERT MANAGEMENT
-   ============================================ */
-// Render all alerts in the alert list
+// ============================================
+// ALERT MANAGEMENT
+// ============================================
 function renderAlerts() {
   const el = document.getElementById('alertList');
   if (!el) return;
@@ -110,18 +106,17 @@ function renderAlerts() {
 }
 
 function updateCounts() {
-  const total = document.getElementById('totalAlerts');
-  const unread = document.getElementById('unreadAlerts');
-  const crit = document.getElementById('critAlerts');
-  const badge = document.getElementById('navBadge');
+  const total      = document.getElementById('totalAlerts');
+  const unread     = document.getElementById('unreadAlerts');
+  const crit       = document.getElementById('critAlerts');
+  const badge      = document.getElementById('navBadge');
   const unreadCount = alerts.filter(a => a.unread).length;
-  if (total) total.textContent = alertCount;
+  if (total)  total.textContent  = alertCount;
   if (unread) unread.textContent = unreadCount;
-  if (crit) crit.textContent = btConnected ? 1 : 0;
-  if (badge) badge.style.display = unreadCount > 0 ? '' : 'none';
+  if (crit)   crit.textContent   = btConnected ? 1 : 0;
+  if (badge)  badge.style.display = unreadCount > 0 ? '' : 'none';
 }
 
-// Clear all alerts and reset the live feed
 function clearAlerts() {
   alerts = [];
   alertCount = 0;
@@ -130,12 +125,10 @@ function clearAlerts() {
   buildChart();
 }
 
-// Add a new alert to the top of the list
 function recordEvent() {
   const now = Date.now();
   eventHistory.push(now);
-  const hourAgo = now - 3600000;
-  eventHistory = eventHistory.filter(ts => ts >= hourAgo);
+  eventHistory = eventHistory.filter(ts => ts >= now - 3600000);
 }
 
 function addAlert(a) {
@@ -147,33 +140,29 @@ function addAlert(a) {
   buildChart();
 }
 
-/* ============================================
-   MODAL DIALOG: Alert details
-   ============================================ */
-// Open alert modal with details
+// ============================================
+// MODAL DIALOG
+// ============================================
 function modalOpen(id) {
   const a = alerts.find(x => x.id === id);
   if (!a) return;
   currentAlertId = id;
-  document.getElementById('mIcon').textContent = a.icon;
+  document.getElementById('mIcon').textContent  = a.icon;
   document.getElementById('mTitle').textContent = a.title;
-  document.getElementById('mSub').textContent = `${a.src} · Today at ${a.time}`;
-  document.getElementById('mBody').textContent = a.body;
+  document.getElementById('mSub').textContent   = `${a.src} · Today at ${a.time}`;
+  document.getElementById('mBody').textContent  = a.body;
   document.getElementById('alertModal').classList.add('open');
 }
 
-// Close the alert modal
 function modalClose(e) {
-  if (!e || e.target.id === 'alertModal') document.getElementById('alertModal').classList.remove('open');
+  if (!e || e.target.id === 'alertModal')
+    document.getElementById('alertModal').classList.remove('open');
 }
 
-// Acknowledge an alert (mark as read and close modal)
 function modalAck() {
-  if (currentAlertId) {
-    alerts = alerts.map(a => a.id === currentAlertId ? { ...a, unread: false } : a);
-    renderAlerts();
-  } else if (currentGmailId) {
-    alerts = alerts.map(a => a.id === currentGmailId ? { ...a, unread: false } : a);
+  const id = currentAlertId || currentGmailId;
+  if (id) {
+    alerts = alerts.map(a => a.id === id ? { ...a, unread: false } : a);
     renderAlerts();
   }
   currentAlertId = null;
@@ -182,31 +171,26 @@ function modalAck() {
 }
 
 function ackAlert(id, event) {
-  if (event && event.stopPropagation) {
-    event.stopPropagation();
-  }
+  if (event && event.stopPropagation) event.stopPropagation();
   if (id == null) return;
   alerts = alerts.map(a => a.id === id ? { ...a, unread: false } : a);
   renderAlerts();
 }
 
-/* ============================================
-   MICRO:BIT DASHBOARD & DISPLAY
-   ============================================ */
-// Build the micro:bit status grid
+// ============================================
+// MICRO:BIT DISPLAY
+// ============================================
 function buildMicroGrid() {
   const el = document.getElementById('ledMatrix');
   if (!el) return;
   el.innerHTML = ['BT', 'RX', 'TX', 'OK'].map(x => `<div class="led-cell">${x}</div>`).join('');
 }
 
-// Test flash animation on screen
 function testFlash() {
   screenFlash('#00d4ff');
   sendCmd('TEST:ALL');
 }
 
-// Flash the entire screen with a color
 function screenFlash(color = '#00d4ff') {
   const f = document.getElementById('flashOverlay');
   if (!f) return;
@@ -217,10 +201,9 @@ function screenFlash(color = '#00d4ff') {
   setTimeout(() => f.classList.remove('go'), 350);
 }
 
-/* ============================================
-   BLUETOOTH LOGGING & COMMUNICATION
-   ============================================ */
-// Log a message to the Bluetooth serial console
+// ============================================
+// BLUETOOTH LOGGING
+// ============================================
 function btLog(msg, cls = '') {
   const log = document.getElementById('btLog');
   if (!log) return;
@@ -231,7 +214,6 @@ function btLog(msg, cls = '') {
   log.scrollTop = log.scrollHeight;
 }
 
-// Clear the Bluetooth log
 function clearLog() {
   const log = document.getElementById('btLog');
   if (!log) return;
@@ -239,27 +221,25 @@ function clearLog() {
   btLog('Log cleared.', 'info');
 }
 
+// ============================================
+// UART NOTIFICATION HANDLER
+// ============================================
 function handleUartNotification(event) {
   const value = event.target.value;
   if (!value) return;
-
   uartBuffer += new TextDecoder().decode(value);
-  let newlineIndex;
-
-  while ((newlineIndex = uartBuffer.indexOf('\n')) !== -1) {
-    const rawMessage = uartBuffer.slice(0, newlineIndex);
-    uartBuffer = uartBuffer.slice(newlineIndex + 1);
-    const message = rawMessage.trim();
+  let idx;
+  while ((idx = uartBuffer.indexOf('\n')) !== -1) {
+    const message = uartBuffer.slice(0, idx).trim();
+    uartBuffer = uartBuffer.slice(idx + 1);
     if (!message) continue;
-
     btLog(`RX ← ${message}`, 'info');
   }
 }
 
-/* ============================================
-   BLUETOOTH DEVICE MANAGEMENT
-   ============================================ */
-// Render empty state for device list
+// ============================================
+// BLUETOOTH DEVICE UI HELPERS
+// ============================================
 function renderDeviceEmptyState(message = 'No device found') {
   const list = document.getElementById('btDeviceList');
   if (!list) return;
@@ -272,7 +252,6 @@ function renderDeviceEmptyState(message = 'No device found') {
   `;
 }
 
-// Render available device in the device list
 function renderAvailableDevice(dev) {
   const list = document.getElementById('btDeviceList');
   if (!list) return;
@@ -288,26 +267,19 @@ function renderAvailableDevice(dev) {
   `;
 }
 
-// Scan for available Bluetooth devices
+// ============================================
+// BLUETOOTH SCAN
+// ============================================
 async function btScan() {
-  addAlert({
-    icon: '📡',
-    lvl: 'info',
-    title: 'Bluetooth scan started',
-    src: 'Bluetooth',
-    urgency: 'l',
-    unread: false,
-    body: 'Scanning for nearby micro:bit devices.'
-  });
   btLog('Scanning for Bluetooth devices…', 'info');
   document.getElementById('btStateTitle').textContent = 'Scanning…';
-  document.getElementById('btStateSub').textContent = 'Looking for nearby micro:bit devices';
-  document.getElementById('btIconWrap').className = 'bt-orb-ring disconnected-icon';
+  document.getElementById('btStateSub').textContent   = 'Looking for nearby micro:bit devices';
+  document.getElementById('btIconWrap').className     = 'bt-orb-ring disconnected-icon';
 
   if (!navigator.bluetooth) {
     btLog('Web Bluetooth is not supported in this browser.', 'err');
     document.getElementById('btStateTitle').textContent = 'Bluetooth unavailable';
-    document.getElementById('btStateSub').textContent = 'Use a supported browser';
+    document.getElementById('btStateSub').textContent   = 'Use Chrome or Edge';
     renderDeviceEmptyState('Bluetooth not supported');
     setDisconnectedUI();
     return;
@@ -322,96 +294,106 @@ async function btScan() {
       ],
       optionalServices: [NUS_SERVICE_UUID]
     });
-
     window.__btLastDevice = dev;
     btLog(`Found: ${dev.name || 'Unknown device'}`, 'ok');
     renderAvailableDevice(dev);
     await btConnectDevice(dev);
+
   } catch (e) {
     if (e.name === 'NotFoundError') {
-      btLog('No device found with filtered scan; falling back to broader scan…', 'info');
+      btLog('Filtered scan found nothing, trying broad scan…', 'info');
       try {
         const dev = await navigator.bluetooth.requestDevice({
           acceptAllDevices: true,
           optionalServices: [NUS_SERVICE_UUID]
         });
-
         window.__btLastDevice = dev;
         btLog(`Found: ${dev.name || 'Unknown device'}`, 'ok');
         renderAvailableDevice(dev);
         await btConnectDevice(dev);
         return;
-      } catch (innerError) {
-        btLog(`Scan failed: ${innerError.message}`, 'err');
-        addAlert({
-          icon: '❌',
-          lvl: 'crit',
-          title: 'Bluetooth scan failed',
-          src: 'Bluetooth',
-          urgency: 'h',
-          unread: false,
-          body: 'Scanning failed: ' + innerError.message
-        });
-        document.getElementById('btStateTitle').textContent = 'Scan failed';
-        document.getElementById('btStateSub').textContent = 'Please try again';
+      } catch (innerErr) {
+        btLog(`Scan failed: ${innerErr.message}`, 'err');
         renderDeviceEmptyState('Scan failed');
         setDisconnectedUI();
         return;
       }
     }
-
-    btLog(`Error: ${e.message}`, 'err');
-    document.getElementById('btStateTitle').textContent = 'Scan failed';
-    document.getElementById('btStateSub').textContent = 'Please try again';
+    btLog(`Scan error: ${e.message}`, 'err');
     renderDeviceEmptyState('Scan failed');
     setDisconnectedUI();
   }
 }
 
-// Connect to a specific Bluetooth device
+// ============================================
+// BLUETOOTH CONNECT  ← the fixed version
+// ============================================
 async function btConnectDevice(dev) {
   if (!dev) return;
   btLog(`Connecting to ${dev.name || 'device'}…`, 'info');
 
   try {
-    const server = await dev.gatt.connect();
+    // Step 1 — connect GATT
+    let server = await dev.gatt.connect();
     btLog('GATT connected, discovering services…', 'info');
 
-    async function getUartService(server, retries = 15) {
-      for (let i = 0; i < retries; i++) {
-        try {
-          const svc = await server.getPrimaryService(NUS_SERVICE_UUID);
-          btLog(`Service found on attempt ${i + 1}`, 'ok');
-          return svc;
-        } catch (e) {
-          btLog(`Service not ready yet (attempt ${i + 1}/${retries}): ${e.message}`, 'info');
-          await new Promise(r => setTimeout(r, 500));
+    // Step 2 — get the UART service, reconnecting if Windows drops it
+    // Windows BLE driver sometimes drops GATT immediately after connect.
+    // We catch that, reconnect, and retry up to 10 times.
+    let service = null;
+    const MAX_ATTEMPTS = 10;
+
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      try {
+        // Reconnect if the server dropped between attempts
+        if (!server.connected) {
+          btLog(`GATT dropped, reconnecting (attempt ${i + 1}/${MAX_ATTEMPTS})…`, 'info');
+          server = await dev.gatt.connect();
+        }
+        service = await server.getPrimaryService(NUS_SERVICE_UUID);
+        btLog(`Service found on attempt ${i + 1} ✓`, 'ok');
+        break;
+      } catch (err) {
+        btLog(`Attempt ${i + 1}/${MAX_ATTEMPTS}: ${err.message}`, 'info');
+        if (i < MAX_ATTEMPTS - 1) {
+          await new Promise(r => setTimeout(r, 600));
+        } else {
+          throw new Error(
+            'Could not find UART service after ' + MAX_ATTEMPTS + ' attempts. ' +
+            'Make sure: (1) No Pairing Required is set in MakeCode, ' +
+            '(2) old pairing is removed from Windows Bluetooth settings AND Device Manager.'
+          );
         }
       }
-      throw new Error('UART service not available after ' + retries + ' attempts. Check: No Pairing Required is set in MakeCode, and old pairing is forgotten in OS Bluetooth settings.');
     }
 
-    const service = await getUartService(server);
+    // Step 3 — get characteristics
+    // NUS_TX_CHAR (6e400002) = micro:bit transmits → app subscribes (notify)
+    // NUS_RX_CHAR (6e400003) = app writes → micro:bit receives (write)
+    btNotifyChar = await service.getCharacteristic(NUS_TX_CHAR_UUID); // notify
+    btTx         = await service.getCharacteristic(NUS_RX_CHAR_UUID); // write
 
-    btNotifyChar = await service.getCharacteristic(NUS_RX_CHAR_UUID); // 6e400002 — subscribe (mic:bit → app)
-    btTx = await service.getCharacteristic(NUS_TX_CHAR_UUID);         // 6e400003 — write (app → micro:bit)
-
+    // Step 4 — subscribe to notifications from micro:bit
     await btNotifyChar.startNotifications();
     btNotifyChar.addEventListener('characteristicvaluechanged', handleUartNotification);
 
-    btDevice = dev;
+    // Step 5 — mark connected
+    btDevice    = dev;
     btConnected = true;
 
     setConnectedUI(dev.name || 'micro:bit');
     btLog('Connected ✓', 'ok');
+
+    // Step 6 — ping to verify two-way comms
     await sendCmd('PING');
 
+    // Step 7 — handle disconnect
     dev.addEventListener('gattserverdisconnected', () => {
-      btConnected = false;
-      btTx = null;
+      btConnected  = false;
+      btTx         = null;
       btNotifyChar = null;
-      btDevice = null;
-      uartBuffer = '';
+      btDevice     = null;
+      uartBuffer   = '';
       setDisconnectedUI();
       addAlert({
         icon: '⚠️', lvl: 'warn', title: 'Bluetooth disconnected',
@@ -431,21 +413,21 @@ async function btConnectDevice(dev) {
     setDisconnectedUI();
   }
 }
-/* ============================================
-   BLUETOOTH UI STATE MANAGEMENT
-   ============================================ */
-// Update UI when device is connected
+
+// ============================================
+// BLUETOOTH UI STATE
+// ============================================
 function setConnectedUI(name) {
   document.getElementById('btStateTitle').textContent = 'Connected';
-  document.getElementById('btStateSub').textContent = name;
-  document.getElementById('btIconWrap').className = 'bt-orb-ring connected-icon';
-  document.getElementById('btScanBtn').style.display = 'none';
+  document.getElementById('btStateSub').textContent   = name;
+  document.getElementById('btIconWrap').className     = 'bt-orb-ring connected-icon';
+  document.getElementById('btScanBtn').style.display       = 'none';
   document.getElementById('btDisconnectBtn').style.display = '';
   const cmdNote = document.getElementById('btCmdNote');
   if (cmdNote) cmdNote.style.display = 'none';
-  document.getElementById('btInfoStatus').textContent = 'Connected ✓';
-  document.getElementById('btInfoStatus').style.color = 'var(--ok)';
-  const chip = document.getElementById('btChip');
+  document.getElementById('btInfoStatus').textContent  = 'Connected ✓';
+  document.getElementById('btInfoStatus').style.color  = 'var(--ok)';
+  const chip      = document.getElementById('btChip');
   if (chip) chip.className = 'status-pill connected';
   const chipLabel = document.getElementById('btChipLabel');
   if (chipLabel) chipLabel.textContent = 'Connected';
@@ -459,18 +441,17 @@ function setConnectedUI(name) {
   updateCounts();
 }
 
-// Update UI when device is disconnected
 function setDisconnectedUI() {
   document.getElementById('btStateTitle').textContent = 'No Device Connected';
-  document.getElementById('btStateSub').textContent = 'Scan to find your micro:bit';
-  document.getElementById('btIconWrap').className = 'bt-orb-ring disconnected-icon';
-  document.getElementById('btScanBtn').style.display = '';
+  document.getElementById('btStateSub').textContent   = 'Scan to find your micro:bit';
+  document.getElementById('btIconWrap').className     = 'bt-orb-ring disconnected-icon';
+  document.getElementById('btScanBtn').style.display       = '';
   document.getElementById('btDisconnectBtn').style.display = 'none';
   const cmdNote = document.getElementById('btCmdNote');
   if (cmdNote) cmdNote.style.display = '';
   document.getElementById('btInfoStatus').textContent = 'Disconnected';
   document.getElementById('btInfoStatus').style.color = 'var(--crit)';
-  const chip = document.getElementById('btChip');
+  const chip      = document.getElementById('btChip');
   if (chip) chip.className = 'status-pill';
   const chipLabel = document.getElementById('btChipLabel');
   if (chipLabel) chipLabel.textContent = 'No Device';
@@ -484,116 +465,100 @@ function setDisconnectedUI() {
   updateCounts();
 }
 
-// Disconnect from the current Bluetooth device
 async function btDisconnect() {
-  if (btDevice && btDevice.gatt.connected) {
-    btDevice.gatt.disconnect();
-  }
   if (btNotifyChar) {
     btNotifyChar.removeEventListener('characteristicvaluechanged', handleUartNotification);
     btNotifyChar = null;
   }
+  if (btDevice && btDevice.gatt.connected) {
+    btDevice.gatt.disconnect();
+  }
   btConnected = false;
-  btDevice = null;
-  btTx = null;
-  uartBuffer = '';
+  btDevice    = null;
+  btTx        = null;
+  uartBuffer  = '';
   setDisconnectedUI();
   btLog('Disconnected.', 'info');
   renderDeviceEmptyState('No device connected');
 }
 
-/* ============================================
-   COMMAND SENDING & MESSAGE PROTOCOL
-   ============================================ */
-// Send a command to the connected device
+// ============================================
+// COMMAND SENDING
+// ============================================
 async function sendCmd(cmd) {
-  btLog(`TX → ${cmd}`, 'info');
   if (!btConnected || !btTx || !(btDevice && btDevice.gatt && btDevice.gatt.connected)) {
-    btLog('Connect a Bluetooth device first.', 'err');
+    btLog('Not connected — command not sent.', 'err');
     return;
   }
+  btLog(`TX → ${cmd}`, 'info');
   try {
-    const encoded = new TextEncoder().encode(cmd + '\n');
-    await btTx.writeValue(encoded);
+    await btTx.writeValue(new TextEncoder().encode(cmd + '\n'));
     btLog(`Sent: ${cmd}`, 'ok');
   } catch (e) {
     btLog(`Send failed: ${e.message}`, 'err');
     return;
   }
   const [type, urg, src] = cmd.split(':');
-  if (type && type !== 'TEST') triggerAlert(type.toLowerCase(), urg || 'l', src || 'PHONE');
+  if (type && type !== 'TEST' && type !== 'PING') triggerAlert(type.toLowerCase(), urg || 'l', src || 'PHONE');
   if (type === 'TEST') screenFlash('#00d4ff');
 }
 
-// Send a custom command from user input
 function sendCustomCmd() {
   const v = document.getElementById('customCmd').value.trim();
   if (v) sendCmd(v);
 }
 
-/* ============================================
-   ALERT TRIGGERING & SOURCE MANAGEMENT
-   ============================================ */
-// Trigger an alert with given parameters
+// ============================================
+// ALERT TRIGGERING & SOURCES
+// ============================================
 function triggerAlert(type, urgency = 'l', src = 'PHONE') {
-  const cfg = sourceConfig[type.toLowerCase()] || { icon: '🔔', title: 'Alert', urgency: 'l' };
+  const cfg  = sourceConfig[type.toLowerCase()] || { icon: '🔔', title: 'Alert', urgency: 'l' };
   const body = `${cfg.title} from ${src}. Command sent to micro:bit: ${type.toUpperCase()}:${urgency.toUpperCase()}`;
-
   addAlert({
     icon: cfg.icon,
-    lvl: urgency === 'h' ? 'crit' : urgency === 'm' ? 'warn' : 'info',
+    lvl:  urgency === 'h' ? 'crit' : urgency === 'm' ? 'warn' : 'info',
     title: cfg.title,
-    src: src,
-    time: nowTime(),
-    urgency: urgency,
-    unread: true,
-    body
+    src, time: nowTime(), urgency, unread: true, body
   });
-
   screenFlash(urgency === 'h' ? '#ff4757' : urgency === 'm' ? '#ffb340' : '#00d4ff');
 }
 
-// Toggle an alert source on/off
 function toggleSource(name, tog) {
   sources[name] = tog.classList.toggle('on');
 }
 
-// Simulate receiving an email alert
 function simulateEmailAlert() {
   if (!sources.email) return;
-  const sender = document.getElementById('emailSender').value.trim() || 'name@example.com';
+  const sender  = document.getElementById('emailSender').value.trim()  || 'name@example.com';
   const keyword = document.getElementById('emailKeyword').value.trim();
-  const cmd = document.getElementById('emailCmd').value.trim() || 'EMAIL:LOW:MAIL';
+  const cmd     = document.getElementById('emailCmd').value.trim()     || 'EMAIL:LOW:MAIL';
   triggerAlert('email', 'l', sender);
   btLog(`Email matched: ${sender}${keyword ? ` | keyword: ${keyword}` : ''}`, 'info');
   if (btConnected) sendCmd(cmd);
 }
 
-// Reset all app settings to defaults
 function resetSettings() {
   if (confirm('Reset all settings to defaults?')) location.reload();
 }
 
-// Build the activity chart for dashboard
+// ============================================
+// ACTIVITY CHART
+// ============================================
 function buildChart() {
   const el = document.getElementById('miniChart');
   if (!el) return;
-  const now = Date.now();
-  const hourAgo = now - 3600000;
+  const now       = Date.now();
+  const hourAgo   = now - 3600000;
   const bucketSize = 3600000 / 8;
-  const buckets = Array.from({ length: 8 }, () => 0);
-
+  const buckets   = Array.from({ length: 8 }, () => 0);
   eventHistory.forEach(ts => {
     if (ts >= hourAgo) {
-      let index = Math.floor((ts - hourAgo) / bucketSize);
-      if (index < 0) index = 0;
-      if (index > 7) index = 7;
-      buckets[index] += 1;
+      let i = Math.floor((ts - hourAgo) / bucketSize);
+      buckets[Math.min(Math.max(i, 0), 7)] += 1;
     }
   });
-
   const max = Math.max(...buckets, 1);
-  el.innerHTML = buckets.map((count, i) =>
+  el.innerHTML = buckets.map(count =>
     `<div class="bar ${count > 0 ? 'hi' : ''}" style="height:${Math.round(count / max * 100)}%"></div>`
   ).join('');
 }
@@ -601,61 +566,200 @@ function buildChart() {
 // ============================================
 // GMAIL INTEGRATION
 // ============================================
-let gmailToken = null;
-let gmailEmail = null;
+let gmailToken  = null;
+let gmailEmail  = null;
+let tokenClient;
 
 const GOOGLE_CLIENT_ID = "768854227704-2mc6bip356pa56ejomb9lss8noc1b82c.apps.googleusercontent.com";
 const SCOPES = "https://www.googleapis.com/auth/gmail.readonly";
-let tokenClient;
 
 async function fetchGmailProfile() {
-  const res = await fetch(
-    "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-    { headers: { Authorization: `Bearer ${gmailToken}` } }
-  );
+  const res  = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile",
+    { headers: { Authorization: `Bearer ${gmailToken}` } });
   const data = await res.json();
   gmailEmail = data.emailAddress;
-  document.getElementById("connectedEmail").textContent = gmailEmail;
-  document.getElementById("googleSignInBtn").style.display = "none";
-  document.getElementById("googleSignOutBtn").style.display = "inline-block";
+  document.getElementById("connectedEmail").textContent      = gmailEmail;
+  document.getElementById("googleSignInBtn").style.display   = "none";
+  document.getElementById("googleSignOutBtn").style.display  = "inline-block";
 }
 
 function startPolling() {
   setInterval(fetchGmail, 15000);
 }
 
+async function fetchGmail() {
+  if (!gmailToken) return;
+  try {
+    const res      = await fetch('https://www.googleapis.com/gmail/v1/users/me/messages?q=is:unread',
+      { headers: { Authorization: `Bearer ${gmailToken}` } });
+    const data     = await res.json();
+    const messages = data.messages || [];
+    const newIds   = new Set();
+
+    if (!gmailBaselineCaptured) {
+      messages.forEach(msg => gmailKnownMessageIds.add(msg.id));
+      gmailBaselineCaptured = true;
+    } else {
+      messages.forEach(msg => {
+        if (!gmailKnownMessageIds.has(msg.id)) {
+          gmailKnownMessageIds.add(msg.id);
+          newIds.add(msg.id);
+        }
+      });
+    }
+
+    if (!messages.length) {
+      document.getElementById('gmailFeed').innerHTML =
+        `<div class="empty"><div class="ei">📭</div><p>No unread emails</p></div>`;
+      return;
+    }
+
+    const emailsList = await Promise.all(
+      messages.slice(0, 10).map(msg =>
+        fetch(`https://www.googleapis.com/gmail/v1/users/me/messages/${msg.id}`,
+          { headers: { Authorization: `Bearer ${gmailToken}` } }).then(r => r.json())
+      )
+    );
+
+    gmailMessages = emailsList.map(msg => {
+      const headers    = msg.payload.headers || [];
+      const subject    = headers.find(h => h.name === 'Subject')?.value || '(No subject)';
+      const from       = headers.find(h => h.name === 'From')?.value    || 'Unknown';
+      const date       = headers.find(h => h.name === 'Date')?.value    || '';
+      const internalDate = msg.internalDate ? parseInt(msg.internalDate, 10) : null;
+      const sentAt     = internalDate
+        ? new Date(internalDate).toLocaleString('en-SG', { hour12: false })
+        : date;
+      const content    = getMessageBody(msg.payload) || msg.snippet || '(No preview available)';
+      const escapedId  = msg.id.replace(/'/g, "\\'");
+      const isNew      = newIds.has(msg.id);
+
+      if (isNew) {
+        if (btConnected) {
+          sendCmd('EMAIL:LOW');
+        } else {
+          addAlert({
+            id: msg.id, icon: '✉️', lvl: 'warn', title: 'Email received',
+            src: 'Gmail', urgency: 'l', unread: true,
+            body: `New email from ${from}. Waiting for micro:bit connection.`
+          });
+        }
+      }
+
+      return {
+        id: msg.id, subject, from, sentAt, content,
+        alertLevel: 'LOW',
+        sentToMicrobit: isNew && btConnected,
+        displayHtml: `
+          <div class="gmail-item" onclick="openGmailMessage('${escapedId}')">
+            <div class="gmail-subject">${escapeHtml(subject)}</div>
+            <div class="gmail-meta">From: ${escapeHtml(from)}</div>
+          </div>
+        `
+      };
+    });
+
+    document.getElementById('gmailFeed').innerHTML = gmailMessages.map(m => m.displayHtml).join('');
+  } catch (e) {
+    console.error('Gmail fetch error:', e);
+  }
+}
+
+function clearGmailFeed() {
+  const feed = document.getElementById('gmailFeed');
+  if (!feed) return;
+  gmailMessages = [];
+  feed.innerHTML = `<div class="empty"><div class="ei">📭</div><p>Gmail feed cleared</p></div>`;
+}
+
+function openGmailMessage(id) {
+  const message = gmailMessages.find(m => m.id === id);
+  if (!message) return;
+  currentGmailId = id;
+  const related  = alerts.find(a => a.id === id);
+  currentAlertId = related ? related.id : null;
+  document.getElementById('mIcon').textContent  = '✉️';
+  document.getElementById('mTitle').textContent = message.subject;
+  document.getElementById('mSub').textContent   = `${message.from} · ${message.sentAt}`;
+  document.getElementById('mBody').innerHTML    = `
+    <div style="display:flex;flex-direction:column;gap:10px;font-family:var(--mono);font-size:12px;color:var(--text);">
+      <div><strong>Subject:</strong> ${escapeHtml(message.subject)}</div>
+      <div><strong>From:</strong> ${escapeHtml(message.from)}</div>
+      <div><strong>Sent At:</strong> ${escapeHtml(message.sentAt)}</div>
+      <div><strong>Alert Level:</strong> ${message.alertLevel}</div>
+      <div><strong>Signal sent:</strong> ${message.sentToMicrobit ? 'Yes (EMAIL:LOW)' : 'No'}</div>
+      <div style="padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);white-space:pre-wrap;">${escapeHtml(message.content)}</div>
+    </div>
+  `;
+  document.getElementById('alertModal').classList.add('open');
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getMessageBody(payload) {
+  if (!payload) return '';
+  if (payload.parts && Array.isArray(payload.parts)) {
+    for (const part of payload.parts) {
+      const text = getMessageBody(part);
+      if (text) return text;
+    }
+  }
+  if (payload.mimeType === 'text/plain' && payload.body?.data)
+    return decodeGmailBase64(payload.body.data);
+  if (payload.mimeType === 'text/html' && payload.body?.data)
+    return decodeGmailBase64(payload.body.data).replace(/<[^>]+>/g, '');
+  if (payload.body?.data)
+    return decodeGmailBase64(payload.body.data);
+  return '';
+}
+
+function decodeGmailBase64(data) {
+  try {
+    const decoded = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
+    return decodeURIComponent(
+      decoded.split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+    );
+  } catch {
+    return atob(data.replace(/-/g, '+').replace(/_/g, '/'));
+  }
+}
+
 // ============================================
 // EXPOSE GLOBALS FOR INLINE onclick HANDLERS
-// (needed because the script loads with defer —
-//  functions must be on window before clicks fire)
 // ============================================
-window.switchPage        = switchPage;
-window.toggleSidebar     = toggleSidebar;
-window.clearAlerts       = clearAlerts;
-window.modalOpen         = modalOpen;
-window.modalClose        = modalClose;
-window.modalAck          = modalAck;
-window.ackAlert          = ackAlert;
-window.testFlash         = testFlash;
-window.clearLog          = clearLog;
-window.btScan            = btScan;
-window.btDisconnect      = btDisconnect;
-window.btConnectDevice   = btConnectDevice;
-window.sendCmd           = sendCmd;
-window.sendCustomCmd     = sendCustomCmd;
-window.triggerAlert      = triggerAlert;
-window.toggleSource      = toggleSource;
+window.switchPage         = switchPage;
+window.toggleSidebar      = toggleSidebar;
+window.clearAlerts        = clearAlerts;
+window.modalOpen          = modalOpen;
+window.modalClose         = modalClose;
+window.modalAck           = modalAck;
+window.ackAlert           = ackAlert;
+window.testFlash          = testFlash;
+window.clearLog           = clearLog;
+window.btScan             = btScan;
+window.btDisconnect       = btDisconnect;
+window.btConnectDevice    = btConnectDevice;
+window.sendCmd            = sendCmd;
+window.sendCustomCmd      = sendCustomCmd;
+window.triggerAlert       = triggerAlert;
+window.toggleSource       = toggleSource;
 window.simulateEmailAlert = simulateEmailAlert;
-window.resetSettings     = resetSettings;
-window.fetchGmail        = fetchGmail;
-window.clearGmailFeed    = clearGmailFeed;
-window.openGmailMessage  = openGmailMessage;
+window.resetSettings      = resetSettings;
+window.fetchGmail         = fetchGmail;
+window.clearGmailFeed     = clearGmailFeed;
+window.openGmailMessage   = openGmailMessage;
 
 // ============================================
 // DOM-READY INITIALISATION
 // ============================================
 document.addEventListener('DOMContentLoaded', () => {
-  // Clock
   const clockEl = document.getElementById('clock');
   if (clockEl) clockEl.textContent = nowTime();
   setInterval(() => {
@@ -663,7 +767,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (el) el.textContent = nowTime();
   }, 1000);
 
-  // App startup
   buildMicroGrid();
   buildChart();
   renderAlerts();
@@ -672,7 +775,6 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(buildChart, 60000);
   switchPage('dashboard');
 
-  // Gmail button wiring (done here so elements are guaranteed to exist)
   const signInBtn = document.getElementById("googleSignInBtn");
   if (signInBtn) {
     signInBtn.onclick = () => {
@@ -694,13 +796,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const signOutBtn = document.getElementById("googleSignOutBtn");
   if (signOutBtn) {
     signOutBtn.onclick = () => {
-      gmailToken = null;
-      gmailEmail = null;
-      gmailKnownMessageIds.clear();
+      gmailToken            = null;
+      gmailEmail            = null;
       gmailBaselineCaptured = false;
-      document.getElementById("gmailStatus").textContent = "Disconnected";
-      document.getElementById("connectedEmail").textContent = "—";
-      document.getElementById("googleSignInBtn").style.display = "inline-block";
+      gmailKnownMessageIds.clear();
+      document.getElementById("gmailStatus").textContent        = "Disconnected";
+      document.getElementById("connectedEmail").textContent     = "—";
+      document.getElementById("googleSignInBtn").style.display  = "inline-block";
       document.getElementById("googleSignOutBtn").style.display = "none";
       document.getElementById("gmailFeed").innerHTML =
         `<div class="empty"><p>No emails loaded</p></div>`;
@@ -708,164 +810,3 @@ document.addEventListener('DOMContentLoaded', () => {
     };
   }
 });
-
-// Fetch emails from Gmail API
-async function fetchGmail() {
-  if (!gmailToken) return;
-  try {
-    const res = await fetch(
-      'https://www.googleapis.com/gmail/v1/users/me/messages?q=is:unread',
-      {
-        headers: {
-          Authorization: `Bearer ${gmailToken}`
-        }
-      }
-    );
-    const data = await res.json();
-    const messages = data.messages || [];
-    const newlyAddedIds = new Set();
-
-    if (!gmailBaselineCaptured) {
-      messages.forEach(msg => gmailKnownMessageIds.add(msg.id));
-      gmailBaselineCaptured = true;
-    } else {
-      messages.forEach(msg => {
-        if (!gmailKnownMessageIds.has(msg.id)) {
-          gmailKnownMessageIds.add(msg.id);
-          newlyAddedIds.add(msg.id);
-        }
-      });
-    }
-
-    if (messages.length === 0) {
-      document.getElementById('gmailFeed').innerHTML = `<div class="empty"><div class="ei">📭</div><p>No unread emails</p></div>`;
-      return;
-    }
-    
-    // Fetch details for each message
-    const emailsList = await Promise.all(
-      messages.slice(0, 10).map(msg => 
-        fetch(`https://www.googleapis.com/gmail/v1/users/me/messages/${msg.id}`, {
-          headers: { Authorization: `Bearer ${gmailToken}` }
-        }).then(r => r.json())
-      )
-    );
-    
-    gmailMessages = emailsList.map(msg => {
-      const headers = msg.payload.headers || [];
-      const subject = headers.find(h => h.name === 'Subject')?.value || '(No subject)';
-      const from = headers.find(h => h.name === 'From')?.value || 'Unknown';
-      const date = headers.find(h => h.name === 'Date')?.value || '';
-      const internalDate = msg.internalDate ? parseInt(msg.internalDate, 10) : null;
-      const sentAt = internalDate ? new Date(internalDate).toLocaleString('en-SG', { hour12: false }) : date;
-      const content = getMessageBody(msg.payload) || msg.snippet || '(No preview available)';
-      const escapedId = msg.id.replace(/'/g, "\\'");
-      const safeSubject = escapeHtml(subject);
-      const safeFrom = escapeHtml(from);
-      const isNewAfterSignIn = newlyAddedIds.has(msg.id);
-      if (isNewAfterSignIn) {
-        if (btConnected) {
-          sendCmd('EMAIL:LOW');
-        } else {
-          addAlert({
-            id: msg.id,
-            icon: '✉️',
-            lvl: 'warn',
-            title: 'Email received',
-            src: 'Gmail',
-            urgency: 'l',
-            unread: true,
-            body: `New email from ${from}. Waiting for micro:bit connection.`
-          });
-        }
-      }
-      return {
-        id: msg.id,
-        subject,
-        from,
-        sentAt,
-        content,
-        alertLevel: 'LOW',
-        sentToMicrobit: isNewAfterSignIn && btConnected,
-        displayHtml: `
-          <div class="gmail-item" onclick="openGmailMessage('${escapedId}')">
-            <div class="gmail-subject">${safeSubject}</div>
-            <div class="gmail-meta">From: ${safeFrom}</div>
-          </div>
-        `
-      };
-    });
-
-    const html = gmailMessages.map(m => m.displayHtml).join('');
-    document.getElementById('gmailFeed').innerHTML = html;
-  } catch (e) {
-    console.error('Gmail fetch error:', e);
-  }
-}
-
-function clearGmailFeed() {
-  const feed = document.getElementById('gmailFeed');
-  if (!feed) return;
-  gmailMessages = [];
-  feed.innerHTML = `<div class="empty"><div class="ei">📭</div><p>Gmail feed cleared</p></div>`;
-}
-
-function openGmailMessage(id) {
-  const message = gmailMessages.find(m => m.id === id);
-  if (!message) return;
-  currentGmailId = id;
-  const relatedAlert = alerts.find(a => a.id === id);
-  currentAlertId = relatedAlert ? relatedAlert.id : null;
-  document.getElementById('mIcon').textContent = '✉️';
-  document.getElementById('mTitle').textContent = message.subject;
-  document.getElementById('mSub').textContent = `${message.from} · ${message.sentAt}`;
-  document.getElementById('mBody').innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:10px;font-family:var(--mono);font-size:12px;color:var(--text);">
-      <div><strong>Subject:</strong> ${escapeHtml(message.subject)}</div>
-      <div><strong>From:</strong> ${escapeHtml(message.from)}</div>
-      <div><strong>Sent At:</strong> ${escapeHtml(message.sentAt)}</div>
-      <div><strong>Alert Level:</strong> ${message.alertLevel}</div>
-      <div><strong>Signal sent:</strong> ${message.sentToMicrobit ? 'Yes (EMAIL:LOW)' : 'No'}</div>
-      <div style="padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);white-space:pre-wrap;">${escapeHtml(message.content)}</div>
-    </div>
-  `;
-  document.getElementById('alertModal').classList.add('open');
-}
-
-function escapeHtml(text) {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function getMessageBody(payload) {
-  if (!payload) return '';
-  if (payload.parts && Array.isArray(payload.parts)) {
-    for (const part of payload.parts) {
-      const text = getMessageBody(part);
-      if (text) return text;
-    }
-  }
-  if (payload.mimeType === 'text/plain' && payload.body && payload.body.data) {
-    return decodeGmailBase64(payload.body.data);
-  }
-  if (payload.mimeType === 'text/html' && payload.body && payload.body.data) {
-    return decodeGmailBase64(payload.body.data).replace(/<[^>]+>/g, '');
-  }
-  if (payload.body && payload.body.data) {
-    return decodeGmailBase64(payload.body.data);
-  }
-  return '';
-}
-
-function decodeGmailBase64(data) {
-  try {
-    const decoded = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
-    return decodeURIComponent(decoded.split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
-  } catch (e) {
-    return atob(data.replace(/-/g, '+').replace(/_/g, '/'));
-  }
-}
